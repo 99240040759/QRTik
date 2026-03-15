@@ -18,6 +18,25 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
+const port = process.env.PORT || 5001
+
+console.log(`Starting server in ${process.env.NODE_ENV || 'development'} mode...`)
+
+if (!process.env.MONGODB_URI) {
+  console.error('FATAL: MONGODB_URI is not defined in environment variables')
+  process.exit(1)
+}
+
+app.use(async (req, res, next) => {
+  try {
+    await connectDb(process.env.MONGODB_URI);
+    next();
+  } catch (error) {
+    console.error('Database Connection Error:', error);
+    res.status(500).json({ error: 'Database connection failed' });
+  }
+});
+
 app.use('/api/auth', authRouter)
 app.use('/api/events', eventsRouter)
 app.use('/api/tickets', ticketsRouter)
@@ -30,23 +49,17 @@ if (process.env.NODE_ENV === 'production') {
   })
 }
 
-const port = process.env.PORT || 5001
-
-console.log(`Starting server in ${process.env.NODE_ENV || 'development'} mode...`)
-
-if (!process.env.MONGODB_URI) {
-  console.error('FATAL: MONGODB_URI is not defined in environment variables')
-  process.exit(1)
+if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+  connectDb(process.env.MONGODB_URI)
+    .then(() => {
+      console.log('Successfully connected to MongoDB')
+      app.listen(port, () => {
+        console.log(`Server is running on port ${port}`)
+      })
+    })
+    .catch((err) => {
+      console.error('Failed to connect to MongoDB:', err.message)
+      process.exit(1)
+    })
 }
 
-connectDb(process.env.MONGODB_URI)
-  .then(() => {
-    console.log('Successfully connected to MongoDB')
-    app.listen(port, () => {
-      console.log(`Server is running on port ${port}`)
-    })
-  })
-  .catch((err) => {
-    console.error('Failed to connect to MongoDB:', err.message)
-    process.exit(1)
-  })
