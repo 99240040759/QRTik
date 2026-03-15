@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Html5QrcodeScanner } from 'html5-qrcode'
+import { Html5Qrcode } from 'html5-qrcode'
 import { apiBase } from '../config'
 
 export function ScannerCard({ myCreatedEvents }) {
@@ -14,40 +14,65 @@ export function ScannerCard({ myCreatedEvents }) {
   useEffect(() => {
     if (!selectedEvent || typeof window === 'undefined') return
 
-    const scanner = new Html5QrcodeScanner(scannerId, {
-      fps: 10,
-      qrbox: { width: 220, height: 220 },
-      aspectRatio: 1.0,
-    })
+    const html5QrCode = new Html5Qrcode(scannerId)
 
-    scanner.render(
-      async (text) => {
-        try {
-          setTone('neutral')
-          setStatus('Checking ticket...')
-          const res = await fetch(`${apiBase}/api/tickets/scan`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: text })
-          })
-          const data = await res.json().catch(() => ({}))
-          if (res.ok) {
-            setTone('success')
-            setStatus('Valid entry')
-          } else {
-            setTone('error')
-            setStatus(data.message || 'Invalid ticket')
+    const startScanner = async () => {
+      try {
+        await html5QrCode.start(
+          { facingMode: "environment" },
+          {
+            fps: 10,
+            qrbox: { width: 220, height: 220 },
+            aspectRatio: 1.0,
+          },
+          async (text) => {
+            // Pause scanning while processing request to avoid spamming the backend
+            if (html5QrCode.isScanning) {
+              try {
+                // html5QrCode.pause() might be available, but letting it try again is fine
+                setTone('neutral')
+                setStatus('Checking ticket...')
+                const res = await fetch(`${apiBase}/api/tickets/scan`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ token: text })
+                })
+                const data = await res.json().catch(() => ({}))
+                if (res.ok) {
+                  setTone('success')
+                  setStatus('Valid entry')
+                  setTimeout(() => { setTone('idle'); setStatus('Aim camera at QR') }, 3000)
+                } else {
+                  setTone('error')
+                  setStatus(data.message || 'Invalid ticket')
+                  setTimeout(() => { setTone('idle'); setStatus('Aim camera at QR') }, 3000)
+                }
+              } catch {
+                setTone('error')
+                setStatus('Connection error')
+                setTimeout(() => { setTone('idle'); setStatus('Aim camera at QR') }, 3000)
+              }
+            }
+          },
+          (errorMessage) => {
+            // normal frame error, ignore
           }
-        } catch {
-          setTone('error')
-          setStatus('Connection error')
-        }
-      },
-      () => {}
-    )
+        )
+      } catch (err) {
+        console.error("Camera access failed", err)
+        setTone('error')
+        setStatus('Camera permission denied or not available.')
+      }
+    }
+
+    startScanner()
 
     return () => {
-      scanner.clear().catch(() => {})
+      if (html5QrCode.isScanning) {
+        html5QrCode.stop().then(() => {
+          html5QrCode.clear()
+        }).catch(err => console.error("Failed to stop scanner", err))
+      }
     }
   }, [selectedEvent])
 
