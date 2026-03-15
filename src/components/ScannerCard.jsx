@@ -14,6 +14,9 @@ export function ScannerCard({ myCreatedEvents }) {
   const activeEvents = (myCreatedEvents || []).filter(e => e.status !== 'completed')
   const isOrganizer = activeEvents.length > 0
 
+  const [scanMode, setScanMode] = useState('camera') // 'camera' or 'file'
+  const html5QrCodeRef = useRef(null)
+
   useEffect(() => {
     if (!selectedEvent || typeof window === 'undefined') return
 
@@ -21,71 +24,62 @@ export function ScannerCard({ myCreatedEvents }) {
     isProcessingRef.current = false
     lastScannedRef.current = { text: null, time: 0 }
 
-    const html5QrCode = new Html5Qrcode(scannerId)
+    if (!html5QrCodeRef.current) {
+        html5QrCodeRef.current = new Html5Qrcode(scannerId)
+    }
+    const html5QrCode = html5QrCodeRef.current
 
-    const startScanner = async () => {
+    // Helper logic to process a scanned token (from camera or file)
+    const processScan = async (text) => {
+        const now = Date.now()
+        if (isProcessingRef.current) return;
+        if (lastScannedRef.current.text === text && (now - lastScannedRef.current.time) < 3000) return;
+
+        isProcessingRef.current = true
+        lastScannedRef.current = { text, time: now }
+        
+        try {
+          setTone('neutral')
+          setStatus('Checking ticket...')
+          
+          const res = await fetch(`${apiBase}/api/tickets/scan`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: text })
+          })
+          const data = await res.json().catch(() => ({}))
+          
+          if (res.ok) {
+            setTone('success')
+            setStatus('Valid entry')
+          } else {
+            setTone('error')
+            setStatus(data.message || 'Invalid ticket')
+          }
+          setTimeout(() => { 
+            setTone('idle')
+            setStatus(scanMode === 'camera' ? 'Aim camera at QR' : 'Upload QR Image')
+            isProcessingRef.current = false
+          }, 2500)
+          
+        } catch {
+          setTone('error')
+          setStatus('Connection error')
+          setTimeout(() => { 
+            setTone('idle'); 
+            setStatus(scanMode === 'camera' ? 'Aim camera at QR' : 'Upload QR Image');
+            isProcessingRef.current = false
+          }, 2500)
+        }
+    }
+
+    const startCamera = async () => {
       try {
         await html5QrCode.start(
           { facingMode: "environment" },
-          {
-            fps: 10,
-            qrbox: { width: 220, height: 220 },
-            aspectRatio: 1.0,
-          },
-          async (text) => {
-            const now = Date.now()
-            
-            // 1. Prevent overlapping requests
-            if (isProcessingRef.current) return;
-            
-            // 2. Prevent scanning the exact same QR code multiple times within 3 seconds
-            if (lastScannedRef.current.text === text && (now - lastScannedRef.current.time) < 3000) {
-              return;
-            }
-
-            isProcessingRef.current = true
-            lastScannedRef.current = { text, time: now }
-            
-            try {
-              setTone('neutral')
-              setStatus('Checking ticket...')
-              
-              const res = await fetch(`${apiBase}/api/tickets/scan`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ token: text })
-              })
-              
-              const data = await res.json().catch(() => ({}))
-              
-              if (res.ok) {
-                setTone('success')
-                setStatus('Valid entry')
-              } else {
-                setTone('error')
-                setStatus(data.message || 'Invalid ticket')
-              }
-              
-              // Hold the success/error state for 2.5 seconds before resetting UI
-              setTimeout(() => { 
-                setTone('idle')
-                setStatus('Aim camera at QR')
-                isProcessingRef.current = false // Allow new scans
-              }, 2500)
-              
-            } catch {
-              setTone('error')
-              setStatus('Connection error')
-              setTimeout(() => { 
-                setTone('idle'); 
-                setStatus('Aim camera at QR');
-                isProcessingRef.current = false
-              }, 2500)
-            }
-          },
-          (errorMessage) => {
-            // normal frame error, ignore
-          }
+          { fps: 10, qrbox: { width: 220, height: 220 }, aspectRatio: 1.0 },
+          processScan,
+          () => {} // ignore frame errors
         )
       } catch (err) {
         console.error("Camera access failed", err)
@@ -94,16 +88,77 @@ export function ScannerCard({ myCreatedEvents }) {
       }
     }
 
-    startScanner()
+    const stopCamera = async () => {
+        if (html5QrCode.isScanning) {
+            try { await html5QrCode.stop() } catch(e) { console.error("Could not stop camera", e) }
+        }
+    }
+
+    if (scanMode === 'camera') {
+        startCamera()
+    } else {
+        stopCamera()
+    }
 
     return () => {
-      if (html5QrCode.isScanning) {
-        html5QrCode.stop().then(() => {
-          html5QrCode.clear()
-        }).catch(err => console.error("Failed to stop scanner", err))
-      }
+        stopCamera().then(() => {
+             // Only clear when leaving the component entirely
+             if (selectedEvent === null && html5QrCodeRef.current) {
+                 html5QrCodeRef.current.clear()
+                 html5QrCodeRef.current = null
+             }
+        })
     }
-  }, [selectedEvent])
+  }, [selectedEvent, scanMode])
+
+  const handleFileUpload = async (e) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    
+    if (html5QrCodeRef.current) {
+        try {
+            setTone('neutral')
+            setStatus('Scanning image...')
+            const decodedText = await html5QrCodeRef.current.scanFile(file, true)
+            // Once decoded, process it through the same flow as the camera
+            // We simulate a small timeout because scanFile is instant
+            setTimeout(() => {
+                // To reuse processScan, we must temporarily trick isProcessingRef
+                isProcessingRef.current = false;
+                // create a fake ID so it doesn't get debounced immediately
+                lastScannedRef.current = {text: null, time: 0} 
+                
+                // process it
+                const html5QrCode = html5QrCodeRef.current;
+                
+                // Duplicated process scan logic for file upload (to avoid hoisting complexities)
+                 const uploadProcess = async () => {
+                    isProcessingRef.current = true
+                    try {
+                      setStatus('Checking ticket...')
+                      const res = await fetch(`${apiBase}/api/tickets/scan`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ token: decodedText })
+                      })
+                      const data = await res.json().catch(() => ({}))
+                      if (res.ok) { setTone('success'); setStatus('Valid entry') } 
+                      else { setTone('error'); setStatus(data.message || 'Invalid ticket') }
+                      setTimeout(() => { setTone('idle'); setStatus('Upload QR Image'); isProcessingRef.current = false; e.target.value = '' }, 2500)
+                    } catch {
+                      setTone('error'); setStatus('Connection error')
+                      setTimeout(() => { setTone('idle'); setStatus('Upload QR Image'); isProcessingRef.current = false; e.target.value = '' }, 2500)
+                    }
+                 }
+                 uploadProcess();
+            }, 500)
+        } catch (err) {
+            setTone('error')
+            setStatus("Couldn't find a QR code in image")
+            setTimeout(() => { setTone('idle'); setStatus('Upload QR Image'); e.target.value = '' }, 3000)
+        }
+    }
+  }
 
   const toneMap = {
     idle: 'bg-gray-400 shadow-[0_0_8px_rgba(156,163,175,0.6)]',
@@ -147,28 +202,61 @@ export function ScannerCard({ myCreatedEvents }) {
   if (selectedEvent) {
     return (
       <div className="bg-white rounded-[24px] border border-gray-100 p-6 sm:p-8 shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
-        <div className="flex items-center gap-3 mb-6">
-          <button
-            onClick={() => { setSelectedEvent(null); setStatus(''); setTone('idle') }}
-            className="flex-shrink-0 w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-gray-600 hover:bg-gray-200 active:scale-95 transition-all"
-            aria-label="Back to events"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" /></svg>
-          </button>
-          <div>
-            <h2 className="m-0 text-[18px] sm:text-[20px] font-bold text-gray-900 tracking-tight leading-tight">{selectedEvent.title}</h2>
-            <p className="m-0 text-[12px] font-medium text-gray-500">Scanning tickets</p>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+              <button
+                onClick={() => { setSelectedEvent(null); setStatus(''); setTone('idle'); setScanMode('camera') }}
+                className="flex-shrink-0 w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-gray-600 hover:bg-gray-200 active:scale-95 transition-all"
+                aria-label="Back to events"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" /></svg>
+              </button>
+              <div>
+                <h2 className="m-0 text-[18px] sm:text-[20px] font-bold text-gray-900 tracking-tight leading-tight">{selectedEvent.title}</h2>
+                <p className="m-0 text-[12px] font-medium text-gray-500">Verifying tickets</p>
+              </div>
+          </div>
+          
+          <div className="flex bg-gray-100 p-1 rounded-lg">
+             <button
+                onClick={() => { setScanMode('camera'); setStatus('Aim camera at QR'); setTone('idle') }}
+                className={`px-3 py-1.5 text-[12px] font-bold rounded-md transition-all ${scanMode === 'camera' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}
+             >
+                Camera
+             </button>
+             <button
+                onClick={() => { setScanMode('file'); setStatus('Upload QR Image'); setTone('idle') }}
+                className={`px-3 py-1.5 text-[12px] font-bold rounded-md transition-all ${scanMode === 'file' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}
+             >
+                Image
+             </button>
           </div>
         </div>
 
         <div
           id={scannerId}
-          className="w-full rounded-[16px] overflow-hidden border border-gray-200 shadow-[inset_0_2px_10px_rgba(0,0,0,0.02)] bg-gray-50 [&>div]:!border-0"
+          className={`w-full rounded-[16px] overflow-hidden border border-gray-200 shadow-[inset_0_2px_10px_rgba(0,0,0,0.02)] bg-gray-50 [&>div]:!border-0 ${scanMode === 'file' ? 'hidden' : 'block'}`}
         />
+
+        {scanMode === 'file' && (
+            <div className="w-full aspect-square max-h-[300px] rounded-[16px] border-2 border-dashed border-gray-300 bg-gray-50 flex flex-col items-center justify-center p-6 text-center hover:bg-gray-100 transition-colors relative">
+                <input 
+                    type="file" 
+                    accept="image/*" 
+                    onChange={handleFileUpload}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                />
+                <svg className="w-10 h-10 text-gray-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                <p className="text-[14px] font-bold text-gray-700 m-0 mb-1">Upload QR from Photos</p>
+                <p className="text-[12px] font-medium text-gray-500 m-0">Tap here to select an image</p>
+            </div>
+        )}
 
         <div className="flex items-center justify-center gap-3 mt-6 text-[14px] font-bold py-3.5 px-4 bg-gray-50 rounded-full border border-gray-100 uppercase tracking-wide text-gray-700">
           <div className={`w-3 h-3 rounded-full ${toneMap[tone] || toneMap.idle}`} />
-          <span>{status || 'Aim camera at QR'}</span>
+          <span>{status || (scanMode === 'camera' ? 'Aim camera at QR' : 'Upload QR Image')}</span>
         </div>
       </div>
     )
