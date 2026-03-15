@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { Html5Qrcode } from 'html5-qrcode'
 import { apiBase } from '../config'
 
@@ -7,12 +7,19 @@ export function ScannerCard({ myCreatedEvents }) {
   const [status, setStatus] = useState('')
   const [tone, setTone] = useState('idle')
   const scannerId = 'qr-scanner'
+  
+  const isProcessingRef = useRef(false)
+  const lastScannedRef = useRef({ text: null, time: 0 })
 
   const activeEvents = (myCreatedEvents || []).filter(e => e.status !== 'completed')
   const isOrganizer = activeEvents.length > 0
 
   useEffect(() => {
     if (!selectedEvent || typeof window === 'undefined') return
+
+    // Reset refs on load
+    isProcessingRef.current = false
+    lastScannedRef.current = { text: null, time: 0 }
 
     const html5QrCode = new Html5Qrcode(scannerId)
 
@@ -26,32 +33,54 @@ export function ScannerCard({ myCreatedEvents }) {
             aspectRatio: 1.0,
           },
           async (text) => {
-            // Pause scanning while processing request to avoid spamming the backend
-            if (html5QrCode.isScanning) {
-              try {
-                // html5QrCode.pause() might be available, but letting it try again is fine
-                setTone('neutral')
-                setStatus('Checking ticket...')
-                const res = await fetch(`${apiBase}/api/tickets/scan`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ token: text })
-                })
-                const data = await res.json().catch(() => ({}))
-                if (res.ok) {
-                  setTone('success')
-                  setStatus('Valid entry')
-                  setTimeout(() => { setTone('idle'); setStatus('Aim camera at QR') }, 3000)
-                } else {
-                  setTone('error')
-                  setStatus(data.message || 'Invalid ticket')
-                  setTimeout(() => { setTone('idle'); setStatus('Aim camera at QR') }, 3000)
-                }
-              } catch {
+            const now = Date.now()
+            
+            // 1. Prevent overlapping requests
+            if (isProcessingRef.current) return;
+            
+            // 2. Prevent scanning the exact same QR code multiple times within 3 seconds
+            if (lastScannedRef.current.text === text && (now - lastScannedRef.current.time) < 3000) {
+              return;
+            }
+
+            isProcessingRef.current = true
+            lastScannedRef.current = { text, time: now }
+            
+            try {
+              setTone('neutral')
+              setStatus('Checking ticket...')
+              
+              const res = await fetch(`${apiBase}/api/tickets/scan`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: text })
+              })
+              
+              const data = await res.json().catch(() => ({}))
+              
+              if (res.ok) {
+                setTone('success')
+                setStatus('Valid entry')
+              } else {
                 setTone('error')
-                setStatus('Connection error')
-                setTimeout(() => { setTone('idle'); setStatus('Aim camera at QR') }, 3000)
+                setStatus(data.message || 'Invalid ticket')
               }
+              
+              // Hold the success/error state for 2.5 seconds before resetting UI
+              setTimeout(() => { 
+                setTone('idle')
+                setStatus('Aim camera at QR')
+                isProcessingRef.current = false // Allow new scans
+              }, 2500)
+              
+            } catch {
+              setTone('error')
+              setStatus('Connection error')
+              setTimeout(() => { 
+                setTone('idle'); 
+                setStatus('Aim camera at QR');
+                isProcessingRef.current = false
+              }, 2500)
             }
           },
           (errorMessage) => {
