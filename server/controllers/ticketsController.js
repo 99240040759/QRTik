@@ -16,6 +16,9 @@ export const registerTicket = async (req, res) => {
     if (event.status === 'completed') {
       return res.status(400).json({ message: 'Event has ended' })
     }
+    if (event.organizerId.toString() === req.user.id) {
+      return res.status(400).json({ message: 'Organizer cannot register their own event' })
+    }
     const user = await User.findById(req.user.id)
     if (!user) {
       return res.status(400).json({ message: 'User not found' })

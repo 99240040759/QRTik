@@ -13,19 +13,10 @@ export async function authRequired(req, res, next) {
     if (!user) {
       return res.status(401).json({ message: 'Unauthorized' })
     }
-    req.user = { id: user._id.toString(), role: user.role }
+    req.user = { id: user._id.toString() }
     next()
   } catch {
     res.status(401).json({ message: 'Unauthorized' })
-  }
-}
-
-export function requireRole(role) {
-  return (req, res, next) => {
-    if (!req.user || req.user.role !== role) {
-      return res.status(403).json({ message: 'Forbidden' })
-    }
-    next()
   }
 }
 

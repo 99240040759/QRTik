@@ -29,7 +29,7 @@ export function Dashboard({ user, token }) {
   async function handleRegister(eventId) {
     const data = await request('/api/tickets/register', {
       method: 'POST',
-      body: JSON.stringify({ eventId, userId: user._id })
+      body: JSON.stringify({ eventId })
     })
     loadData()
     return data
@@ -38,7 +38,7 @@ export function Dashboard({ user, token }) {
   async function handleCreateEvent(eventData) {
     await request('/api/events', {
       method: 'POST',
-      body: JSON.stringify({ organizerId: user._id, ...eventData })
+      body: JSON.stringify(eventData)
     })
     loadData()
     setActiveTab('manage')
