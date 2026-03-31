@@ -85,11 +85,11 @@ npm run server    # Start backend (Express on PORT)
 |--------|------------------------|------|--------------------------|
 | POST   | /api/auth/register     | No   | Create a new account     |
 | POST   | /api/auth/login        | No   | Sign in                  |
-| GET    | /api/events            | No   | List all events          |
+| GET    | /api/events            | Yes  | List all events          |
 | POST   | /api/events            | Yes  | Create an event          |
 | PUT    | /api/events/:id        | Yes  | Update an event          |
 | DELETE | /api/events/:id        | Yes  | Delete an event          |
-| GET    | /api/events/:id/summary| No   | Event details + sold count|
+| GET    | /api/events/:id/summary| Yes  | Event details + sold count|
 | POST   | /api/tickets/register  | Yes  | Register for an event    |
-| POST   | /api/tickets/scan      | No   | Scan a ticket QR code    |
+| POST   | /api/tickets/scan      | Yes  | Scan a ticket QR code    |
 | GET    | /api/tickets/my        | Yes  | Get user's tickets       |
